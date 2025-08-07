@@ -1,11 +1,10 @@
 const { google } = require('googleapis');
 
+// Final, more precise regular expressions
 const TRACKING_REGEX = /\b(1Z[A-Z0-9]{16}|\d{12,15}|\d{20,22}|9\d{15,21}|TBA\d{12})\b/i;
 const AMAZON_ORDER_REGEX = /\b\d{3}-\d{7}-\d{7}\b/;
-// Regex to find the original shipper from the email body
-const SHIPPER_REGEX = /(?:shipment from|Sold by)\s*([A-Z\s&;]+)\b/i;
-// Regex to find the delivery date from the email body
-const DELIVERY_DATE_REGEX = /(?:Arriving|delivery date):?\s*(.*?)(?=\s*Track|\n|$)/i;
+const SHIPPER_REGEX = /shipment from\s+([A-Z\s&;]+)\b/i;
+const DELIVERY_DATE_REGEX = /(?:scheduled delivery date|Arriving)\s*:?\s*(.*?)(?=\s*Estimated|\n|$)/i;
 
 
 function getPlainTextBody(message) {
@@ -67,12 +66,10 @@ exports.handler = async (event) => {
         const uniqueId = trackingMatch ? trackingMatch[0] : (amazonMatch ? amazonMatch[0] : null);
         if (!uniqueId) return;
 
-        // Find original shipper from body, fallback to subject, then fallback to From header
-        const shipperMatch = fullBody.match(SHIPPER_REGEX) || subjectText.match(SHIPPER_REGEX);
+        const shipperMatch = fullBody.match(SHIPPER_REGEX);
         const originalShipper = shipperMatch ? shipperMatch[1].trim() : null;
         const sender = originalShipper || fromHeader.value.split('<')[0].replace(/"/g, '').trim();
 
-        // Find delivery date from body, fallback to email date
         const deliveryDateMatch = fullBody.match(DELIVERY_DATE_REGEX);
         const arrivalDate = deliveryDateMatch ? new Date(deliveryDateMatch[1].trim()) : new Date(dateHeader.value);
 
