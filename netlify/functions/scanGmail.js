@@ -30,11 +30,10 @@ exports.handler = async (event) => {
   const gmail = google.gmail({ version: 'v1', auth: oAuth2Client });
 
   try {
-    // A much broader and more effective search query
     const searchResponse = await gmail.users.messages.list({
       userId: 'me',
       q: 'in:anywhere {subject:"your order has shipped" subject:"out for delivery" subject:shipment subject:delivery subject:tracking} newer_than:7d',
-      maxResults: 25,
+      maxResults: 50, // Increase results to ensure we get all related emails
     });
 
     const messages = searchResponse.data.messages;
@@ -42,7 +41,8 @@ exports.handler = async (event) => {
       return { statusCode: 200, body: JSON.stringify([]) };
     }
     
-    const packages = [];
+    // Re-introduce the Map to handle duplicates
+    const uniquePackages = new Map();
 
     const promises = messages.map(async (message) => {
       try {
@@ -59,21 +59,25 @@ exports.handler = async (event) => {
         const trackingMatch = fullBody.match(TRACKING_REGEX);
         const amazonMatch = fullBody.match(AMAZON_ORDER_REGEX);
         
+        // Use the first available unique ID. If none, we can't de-duplicate this email.
         const uniqueId = trackingMatch ? trackingMatch[0] : (amazonMatch ? amazonMatch[0] : null);
         
+        if (!uniqueId) return; // If we have no way to uniquely identify it, skip it.
+
         let carrier = 'Unknown';
         if (fromHeader.value.toLowerCase().includes('fedex')) carrier = 'FedEx';
         else if (fromHeader.value.toLowerCase().includes('ups')) carrier = 'UPS';
         else if (fromHeader.value.toLowerCase().includes('usps')) carrier = 'USPS';
         else if (fromHeader.value.toLowerCase().includes('amazon')) carrier = 'Amazon';
 
-        packages.push({
+        // Set the package in the map. Duplicates with the same ID will be overwritten.
+        uniquePackages.set(uniqueId, {
             sender: fromHeader.value.split('<')[0].replace(/"/g, '').trim(),
             carrier: carrier,
             description: subjectHeader.value,
-            trackingNumber: uniqueId || 'See Email',
+            trackingNumber: uniqueId,
             date: new Date(dateHeader.value).toLocaleDateString(),
-            status: fullBody.includes("Delivered") ? "Delivered" : "In Transit",
+            status: fullBody.includes("has been delivered") ? "Delivered" : "In Transit",
         });
       } catch (e) {
         console.warn(`Could not process message ID: ${message.id}`, e);
@@ -82,8 +86,8 @@ exports.handler = async (event) => {
     
     await Promise.all(promises);
 
-    // Filter out delivered items from the final list
-    const undeliveredPackages = packages.filter(pkg => pkg.status !== "Delivered");
+    const allPackages = Array.from(uniquePackages.values());
+    const undeliveredPackages = allPackages.filter(pkg => pkg.status !== "Delivered");
 
     return { statusCode: 200, body: JSON.stringify(undeliveredPackages) };
 
