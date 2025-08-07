@@ -1,5 +1,4 @@
-import React, { useState } from 'react';
-// UPDATED: We now import 'useGoogleLogin' instead of 'GoogleLogin'
+import React, { useState, useEffect } from 'react';
 import { useGoogleLogin, googleLogout } from '@react-oauth/google';
 import axios from 'axios';
 import PackageTable from './PackageTable';
@@ -12,40 +11,44 @@ const initialPackages = [
 function App() {
   const [user, setUser] = useState(null);
   const [packages, setPackages] = useState(initialPackages);
-  const [token, setToken] = useState(null);
+  const [token, setToken] = useState(null); 
   const [loading, setLoading] = useState(false);
 
-  // NEW: We define the login process using the hook
-  const login = useGoogleLogin({
-    // This is the function that will run on a successful login
-    onSuccess: (tokenResponse) => {
-      setUser({ loggedIn: true });
-      // The token is now correctly found in tokenResponse.access_token
-      setToken(tokenResponse.access_token);
-    },
-    onError: (error) => console.log('Login Failed:', error),
-    // We still must request permission to read mail
-    scope: "https://www.googleapis.com/auth/gmail.readonly"
-  });
+  // This function can now be called with a token directly,
+  // or it will use the one saved in state.
+  const handleScan = async (currentToken) => {
+    const tokenToUse = currentToken || token; // Use the provided token or the saved one
 
-  const handleScan = async () => {
-    // This part is now correct and will find the token
-    if (!token) {
+    if (!tokenToUse) {
       alert("Authentication token not found. Please log in again.");
       return;
     }
+
     setLoading(true);
     try {
       const response = await axios.post('/.netlify/functions/scanGmail', {
-        token: token,
+        token: tokenToUse,
       });
       setPackages(response.data);
     } catch (error) {
       console.error("Error fetching packages:", error);
-      alert("Failed to fetch packages. Check the console for details.");
+      alert("Failed to fetch packages. Please check the browser console for details.");
     }
     setLoading(false);
   };
+  
+  // This is the key change. We now immediately call handleScan
+  // with the new token right after login.
+  const login = useGoogleLogin({
+    onSuccess: (tokenResponse) => {
+      setUser({ loggedIn: true });
+      const newToken = tokenResponse.access_token;
+      setToken(newToken); // Save the token for later
+      handleScan(newToken); // Trigger the first scan immediately
+    },
+    onError: (error) => console.log('Login Failed:', error),
+    scope: "https://www.googleapis.com/auth/gmail.readonly"
+  });
 
   const handleLogout = () => {
     googleLogout();
@@ -61,7 +64,6 @@ function App() {
         {!user ? (
           <div>
             <p>Sign in to track your packages.</p>
-            {/* UPDATED: We now use a regular button that calls our login function */}
             <button onClick={() => login()} className="login-button">
               Sign in with Google
             </button>
@@ -70,7 +72,8 @@ function App() {
           <div>
             <h2>Your Deliveries</h2>
             <button onClick={handleLogout} style={{marginBottom: '10px', marginRight: '10px'}}>Logout</button>
-            <button onClick={handleScan} style={{marginBottom: '10px'}} disabled={loading}>
+            {/* This button now calls handleScan without an argument, so it uses the saved token */}
+            <button onClick={() => handleScan()} style={{marginBottom: '10px'}} disabled={loading}>
               {loading ? 'Scanning...' : 'Refresh Packages'}
             </button>
             
