@@ -51,9 +51,9 @@ exports.handler = async (event) => {
         
         const fullBody = getPlainTextBody(msg);
         // --- ADD THIS DEBUGGING CODE ---
-        const subjectHeader = msg.data.payload.headers.find(h => h.name === 'Subject');
-        console.log(`--- Checking Email Subject: ${subjectHeader ? subjectHeader.value : 'No Subject'} ---`);
-        console.log(fullBody.substring(0, 500)); // Log the first 500 characters
+const subjectHeader = msg.data.payload.headers.find(h => h.name === 'Subject');
+console.log(`--- Checking Email Subject: ${subjectHeader ? subjectHeader.value : 'No Subject'} ---`);
+console.log(fullBody.substring(0, 500)); // Log the first 500 characters
 // --------------------------------
         if (!fullBody) return; // Skip if email has no parsable body
 
