@@ -1,8 +1,9 @@
 const { google } = require('googleapis');
 
-// A robust regex that specifically looks for 12-digit FedEx, among others.
-const TRACKING_REGEX = /\b(1Z[A-Z0-9]{16}|[0-9]{12}|[0-9]{15}|[0-9]{20,22}|9\d{15,21}|TBA\d{12})\b/i;
+const TRACKING_REGEX = /\b(1Z[A-Z0-9]{16}|\d{12,15}|\d{20,22}|9\d{15,21}|TBA\d{12})\b/i;
 const AMAZON_ORDER_REGEX = /\b\d{3}-\d{7}-\d{7}\b/;
+// New regex to find the original shipper from the subject line
+const SHIPPER_REGEX = /shipment from\s+([A-Z\s]+)\b/i;
 
 function getPlainTextBody(message) {
   let body = '';
@@ -57,13 +58,17 @@ exports.handler = async (event) => {
         const subjectText = subjectHeader.value;
         const fullBody = getPlainTextBody(msg);
 
-        // Search for tracking number in SUBJECT first, then in BODY.
         let trackingMatch = subjectText.match(TRACKING_REGEX) || fullBody.match(TRACKING_REGEX);
         const amazonMatch = subjectText.match(AMAZON_ORDER_REGEX) || fullBody.match(AMAZON_ORDER_REGEX);
         
         const uniqueId = trackingMatch ? trackingMatch[0] : (amazonMatch ? amazonMatch[0] : null);
         
-        if (!uniqueId) return; // Skip if no identifiable number is found anywhere.
+        if (!uniqueId) return;
+
+        // Logic to find the original shipper
+        const shipperMatch = subjectText.match(SHIPPER_REGEX);
+        const originalShipper = shipperMatch ? shipperMatch[1].trim() : null;
+        const sender = originalShipper || fromHeader.value.split('<')[0].replace(/"/g, '').trim();
 
         let carrier = 'Unknown';
         if (fromHeader.value.toLowerCase().includes('fedex')) carrier = 'FedEx';
@@ -71,14 +76,21 @@ exports.handler = async (event) => {
         else if (fromHeader.value.toLowerCase().includes('usps')) carrier = 'USPS';
         else if (fromHeader.value.toLowerCase().includes('amazon')) carrier = 'Amazon';
 
-        uniquePackages.set(uniqueId, {
-            sender: fromHeader.value.split('<')[0].replace(/"/g, '').trim(),
+        const packageData = {
+            sender: sender,
             carrier: carrier,
             description: subjectText,
             trackingNumber: uniqueId,
-            date: new Date(dateHeader.value).toLocaleDateString(),
+            date: new Date(dateHeader.value), // Keep as a Date object for comparison
             status: fullBody.includes("has been delivered") ? "Delivered" : "In Transit",
-        });
+        };
+        
+        // Logic to only keep the latest update
+        const existingPackage = uniquePackages.get(uniqueId);
+        if (!existingPackage || packageData.date > existingPackage.date) {
+          uniquePackages.set(uniqueId, packageData);
+        }
+
       } catch (e) {
         console.warn(`Could not process message ID: ${message.id}`, e);
       }
@@ -86,7 +98,11 @@ exports.handler = async (event) => {
     
     await Promise.all(promises);
 
-    const allPackages = Array.from(uniquePackages.values());
+    const allPackages = Array.from(uniquePackages.values()).map(pkg => ({
+        ...pkg,
+        date: pkg.date.toLocaleDateString() // Convert date to string for display
+    }));
+
     const undeliveredPackages = allPackages.filter(pkg => pkg.status !== "Delivered");
 
     return { statusCode: 200, body: JSON.stringify(undeliveredPackages) };
