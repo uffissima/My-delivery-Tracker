@@ -50,6 +50,11 @@ exports.handler = async (event) => {
         const msg = await gmail.users.messages.get({ userId: 'me', id: message.id, format: 'full' });
         
         const fullBody = getPlainTextBody(msg);
+        // --- ADD THIS DEBUGGING CODE ---
+        const subjectHeader = msg.data.payload.headers.find(h => h.name === 'Subject');
+        console.log(`--- Checking Email Subject: ${subjectHeader ? subjectHeader.value : 'No Subject'} ---`);
+        console.log(fullBody.substring(0, 500)); // Log the first 500 characters
+// --------------------------------
         if (!fullBody) return; // Skip if email has no parsable body
 
         const trackingMatch = fullBody.match(TRACKING_REGEX);
