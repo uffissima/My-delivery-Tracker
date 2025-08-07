@@ -2,10 +2,8 @@ const { google } = require('googleapis');
 
 const TRACKING_REGEX = /\b(1Z[A-Z0-9]{16}|[0-9]{20,22}|9\d{15,21})\b/i;
 
-// This is a more robust helper function with better error checking.
 function getPlainTextBody(message) {
   let body = '';
-  // Check if payload exists before trying to access its parts
   if (message.data && message.data.payload) {
       const parts = message.data.payload.parts || [];
       const plainTextPart = parts.find(part => part.mimeType === 'text/plain');
@@ -50,21 +48,21 @@ exports.handler = async (event) => {
         const msg = await gmail.users.messages.get({ userId: 'me', id: message.id, format: 'full' });
         
         const fullBody = getPlainTextBody(msg);
-        // --- ADD THIS DEBUGGING CODE ---
-const subjectHeader = msg.data.payload.headers.find(h => h.name === 'Subject');
-console.log(`--- Checking Email Subject: ${subjectHeader ? subjectHeader.value : 'No Subject'} ---`);
-console.log(fullBody.substring(0, 500)); // Log the first 500 characters
-// --------------------------------
-        if (!fullBody) return; // Skip if email has no parsable body
+        if (!fullBody) return;
 
+        // --- SAFER DEBUGGING CODE ---
+        const headers = msg.data.payload.headers || []; // Default to an empty array
+        const subjectHeader = headers.find(h => h.name === 'Subject');
+        console.log(`--- Checking Email Subject: ${subjectHeader ? subjectHeader.value : 'No Subject'} ---`);
+        console.log(fullBody.substring(0, 500));
+        // --------------------------
+        
         const trackingMatch = fullBody.match(TRACKING_REGEX);
-        if (!trackingMatch) return; // Skip if no tracking number found
+        if (!trackingMatch) return;
         
         const trackingNumber = trackingMatch[0];
-        const headers = msg.data.payload.headers;
         const fromHeader = headers.find(h => h.name === 'From');
         const dateHeader = headers.find(h => h.name === 'Date');
-        const subjectHeader = headers.find(h => h.name === 'Subject');
         
         const sender = fromHeader ? fromHeader.value.split('<')[0].replace(/"/g, '').trim() : 'Unknown';
         const description = subjectHeader ? subjectHeader.value : msg.data.snippet;
@@ -80,7 +78,6 @@ console.log(fullBody.substring(0, 500)); // Log the first 500 characters
             status: 'In Transit',
         });
       } catch (e) {
-        // If a single email fails to process, log it but don't crash the whole function
         console.warn(`Could not process message ID: ${message.id}`, e);
       }
     });
