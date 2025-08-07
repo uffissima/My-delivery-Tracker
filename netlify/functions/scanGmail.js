@@ -1,22 +1,21 @@
 const { google } = require('googleapis');
 
-// Regex for standard tracking numbers
-const TRACKING_REGEX = /\b(1Z[A-Z0-9]{16}|[0-9]{20,22}|9\d{15,21})\b/i;
-// Regex for Amazon Order IDs
-const AMAZON_ORDER_REGEX = /\b\d{3}-\d{7}-\d{7}\b/;
+// UPDATED: A more flexible REGEX to catch more carrier formats, including 12-digit FedEx
+const TRACKING_REGEX = /\b(1Z[A-Z0-9]{16}|\d{12,15}|\d{20,22}|9\d{15,21})\b/i;
 
 function getPlainTextBody(message) {
   let body = '';
   if (message.data && message.data.payload) {
-    const parts = message.data.payload.parts || [];
-    const plainTextPart = parts.find(part => part.mimeType === 'text/plain');
+      const parts = message.data.payload.parts || [];
+      const plainTextPart = parts.find(part => part.mimeType === 'text/plain');
 
-    if (plainTextPart && plainTextPart.body && plainTextPart.body.data) {
-      body = Buffer.from(plainTextPart.body.data, 'base64').toString('utf8');
-    }
-    if (!body && message.data.payload.body && message.data.payload.body.data) {
-      body = Buffer.from(message.data.payload.body.data, 'base64').toString('utf8');
-    }
+      if (plainTextPart && plainTextPart.body && plainTextPart.body.data) {
+          body = Buffer.from(plainTextPart.body.data, 'base64').toString('utf8');
+      }
+
+      if (!body && message.data.payload.body && message.data.payload.body.data) {
+          body = Buffer.from(message.data.payload.body.data, 'base64').toString('utf8');
+      }
   }
   return body;
 }
@@ -34,7 +33,7 @@ exports.handler = async (event) => {
   try {
     const searchResponse = await gmail.users.messages.list({
       userId: 'me',
-      q: '("your order has shipped" OR "your amazon.com order" OR "tracking number" OR "out for delivery") newer_than:7d',
+      q: '("your order has shipped" OR "tracking number" OR "out for delivery" OR "fedex shipment") newer_than:7d',
       maxResults: 25,
     });
 
@@ -48,40 +47,36 @@ exports.handler = async (event) => {
     const promises = messages.map(async (message) => {
       try {
         const msg = await gmail.users.messages.get({ userId: 'me', id: message.id, format: 'full' });
+        
         const fullBody = getPlainTextBody(msg);
         if (!fullBody) return;
-        
-        // Try to find a standard tracking number OR an Amazon order ID
-        const trackingMatch = fullBody.match(TRACKING_REGEX);
-        const amazonMatch = fullBody.match(AMAZON_ORDER_REGEX);
-        
-        if (!trackingMatch && !amazonMatch) return; // Skip if neither is found
 
-        const uniqueId = trackingMatch ? trackingMatch[0] : amazonMatch[0];
-        
+        // --- DEBUGGING CODE IS STILL HERE ---
         const headers = msg.data.payload.headers || [];
+        const subjectHeader = headers.find(h => h.name === 'Subject');
+        console.log(`--- Checking Email Subject: ${subjectHeader ? subjectHeader.value : 'No Subject'} ---`);
+        console.log(fullBody.substring(0, 500));
+        // ------------------------------------
+        
+        const trackingMatch = fullBody.match(TRACKING_REGEX);
+        if (!trackingMatch) return;
+        
+        const trackingNumber = trackingMatch[0];
         const fromHeader = headers.find(h => h.name === 'From');
         const dateHeader = headers.find(h => h.name === 'Date');
-        const subjectHeader = headers.find(h => h.name === 'Subject');
         
         const sender = fromHeader ? fromHeader.value.split('<')[0].replace(/"/g, '').trim() : 'Unknown';
         const description = subjectHeader ? subjectHeader.value : msg.data.snippet;
+
         let carrier = 'Unknown';
+        if (/^1Z/i.test(trackingNumber)) carrier = 'UPS';
+        else if (trackingNumber.length > 20 || /^9/i.test(trackingNumber)) carrier = 'USPS';
+        else carrier = 'FedEx';
 
-        // Set carrier based on what we found
-        if (trackingMatch) {
-            if (/^1Z/i.test(uniqueId)) carrier = 'UPS';
-            else if (uniqueId.length > 20 || /^9/i.test(uniqueId)) carrier = 'USPS';
-            else carrier = 'FedEx';
-        } else if (amazonMatch) {
-            carrier = 'Amazon';
-        }
-
-        uniquePackages.set(uniqueId, {
-            sender, carrier, description,
-            trackingNumber: uniqueId, // Use the ID we found for display
+        uniquePackages.set(trackingNumber, {
+            sender, carrier, description, trackingNumber,
             date: dateHeader ? new Date(dateHeader.value).toLocaleDateString() : 'N/A',
-            status: fullBody.includes("Delivered") ? "Delivered" : "In Transit",
+            status: 'In Transit',
         });
       } catch (e) {
         console.warn(`Could not process message ID: ${message.id}`, e);
@@ -89,11 +84,9 @@ exports.handler = async (event) => {
     });
     
     await Promise.all(promises);
-    // Filter out delivered packages before sending
-    const allPackages = Array.from(uniquePackages.values());
-    const undeliveredPackages = allPackages.filter(pkg => pkg.status !== "Delivered");
+    const packages = Array.from(uniquePackages.values());
 
-    return { statusCode: 200, body: JSON.stringify(undeliveredPackages) };
+    return { statusCode: 200, body: JSON.stringify(packages) };
 
   } catch (error) {
     console.error('Error scanning Gmail:', error);
