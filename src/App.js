@@ -60,7 +60,7 @@ function App() {
   return (
     <div className="App">
       <header className="App-header">
-        <h1>📦 Dispatch</h1>
+        <h1>📦 Deliveries</h1>
         {!user ? (
           <div>
             <p>Sign in to track your packages.</p>
