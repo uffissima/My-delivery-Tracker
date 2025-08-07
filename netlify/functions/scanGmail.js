@@ -33,7 +33,7 @@ exports.handler = async (event) => {
   try {
     const searchResponse = await gmail.users.messages.list({
       userId: 'me',
-      q: '("your order has shipped" OR "tracking number" OR "out for delivery" OR "fedex shipment") newer_than:7d',
+      q: 'in:anywhere ("your order has shipped" OR "tracking number" OR "out for delivery" OR "shipment notification" OR "delivery update" OR from:ups OR from:fedex OR from:usps) newer_than:7d',
       maxResults: 25,
     });
 
