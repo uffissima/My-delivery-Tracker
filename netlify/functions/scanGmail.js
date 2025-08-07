@@ -2,8 +2,11 @@ const { google } = require('googleapis');
 
 const TRACKING_REGEX = /\b(1Z[A-Z0-9]{16}|\d{12,15}|\d{20,22}|9\d{15,21}|TBA\d{12})\b/i;
 const AMAZON_ORDER_REGEX = /\b\d{3}-\d{7}-\d{7}\b/;
-// New regex to find the original shipper from the subject line
-const SHIPPER_REGEX = /shipment from\s+([A-Z\s]+)\b/i;
+// Regex to find the original shipper from the email body
+const SHIPPER_REGEX = /(?:shipment from|Sold by)\s*([A-Z\s&;]+)\b/i;
+// Regex to find the delivery date from the email body
+const DELIVERY_DATE_REGEX = /(?:Arriving|delivery date):?\s*(.*?)(?=\s*Track|\n|$)/i;
+
 
 function getPlainTextBody(message) {
   let body = '';
@@ -62,13 +65,16 @@ exports.handler = async (event) => {
         const amazonMatch = subjectText.match(AMAZON_ORDER_REGEX) || fullBody.match(AMAZON_ORDER_REGEX);
         
         const uniqueId = trackingMatch ? trackingMatch[0] : (amazonMatch ? amazonMatch[0] : null);
-        
         if (!uniqueId) return;
 
-        // Logic to find the original shipper
-        const shipperMatch = subjectText.match(SHIPPER_REGEX);
+        // Find original shipper from body, fallback to subject, then fallback to From header
+        const shipperMatch = fullBody.match(SHIPPER_REGEX) || subjectText.match(SHIPPER_REGEX);
         const originalShipper = shipperMatch ? shipperMatch[1].trim() : null;
         const sender = originalShipper || fromHeader.value.split('<')[0].replace(/"/g, '').trim();
+
+        // Find delivery date from body, fallback to email date
+        const deliveryDateMatch = fullBody.match(DELIVERY_DATE_REGEX);
+        const arrivalDate = deliveryDateMatch ? new Date(deliveryDateMatch[1].trim()) : new Date(dateHeader.value);
 
         let carrier = 'Unknown';
         if (fromHeader.value.toLowerCase().includes('fedex')) carrier = 'FedEx';
@@ -81,11 +87,10 @@ exports.handler = async (event) => {
             carrier: carrier,
             description: subjectText,
             trackingNumber: uniqueId,
-            date: new Date(dateHeader.value), // Keep as a Date object for comparison
-            status: fullBody.includes("has been delivered") ? "Delivered" : "In Transit",
+            date: arrivalDate,
+            status: fullBody.toLowerCase().includes("has been delivered") ? "Delivered" : "In Transit",
         };
         
-        // Logic to only keep the latest update
         const existingPackage = uniquePackages.get(uniqueId);
         if (!existingPackage || packageData.date > existingPackage.date) {
           uniquePackages.set(uniqueId, packageData);
@@ -100,7 +105,7 @@ exports.handler = async (event) => {
 
     const allPackages = Array.from(uniquePackages.values()).map(pkg => ({
         ...pkg,
-        date: pkg.date.toLocaleDateString() // Convert date to string for display
+        date: pkg.date.toLocaleDateString()
     }));
 
     const undeliveredPackages = allPackages.filter(pkg => pkg.status !== "Delivered");
