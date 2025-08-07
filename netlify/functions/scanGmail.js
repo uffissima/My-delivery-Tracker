@@ -1,6 +1,7 @@
 const { google } = require('googleapis');
 
-const TRACKING_REGEX = /\b(1Z[A-Z0-9]{16}|\d{12,15}|\d{20,22}|9\d{15,21}|TBA\d{12})\b/i;
+// A robust regex that specifically looks for 12-digit FedEx, among others.
+const TRACKING_REGEX = /\b(1Z[A-Z0-9]{16}|[0-9]{12}|[0-9]{15}|[0-9]{20,22}|9\d{15,21}|TBA\d{12})\b/i;
 const AMAZON_ORDER_REGEX = /\b\d{3}-\d{7}-\d{7}\b/;
 
 function getPlainTextBody(message) {
@@ -40,39 +41,41 @@ exports.handler = async (event) => {
       return { statusCode: 200, body: JSON.stringify([]) };
     }
     
-    // Use a Map with the email's threadId as the key for perfect de-duplication
     const uniquePackages = new Map();
 
     const promises = messages.map(async (message) => {
       try {
         const msg = await gmail.users.messages.get({ userId: 'me', id: message.id, format: 'full' });
         
-        const threadId = msg.data.threadId;
         const headers = msg.data.payload.headers || [];
         const subjectHeader = headers.find(h => h.name === 'Subject');
         const fromHeader = headers.find(h => h.name === 'From');
         const dateHeader = headers.find(h => h.name === 'Date');
         
         if (!subjectHeader || !fromHeader || !dateHeader) return;
-
+        
+        const subjectText = subjectHeader.value;
         const fullBody = getPlainTextBody(msg);
-        const trackingMatch = fullBody.match(TRACKING_REGEX);
-        const amazonMatch = fullBody.match(AMAZON_ORDER_REGEX);
+
+        // Search for tracking number in SUBJECT first, then in BODY.
+        let trackingMatch = subjectText.match(TRACKING_REGEX) || fullBody.match(TRACKING_REGEX);
+        const amazonMatch = subjectText.match(AMAZON_ORDER_REGEX) || fullBody.match(AMAZON_ORDER_REGEX);
         
         const uniqueId = trackingMatch ? trackingMatch[0] : (amazonMatch ? amazonMatch[0] : null);
         
+        if (!uniqueId) return; // Skip if no identifiable number is found anywhere.
+
         let carrier = 'Unknown';
         if (fromHeader.value.toLowerCase().includes('fedex')) carrier = 'FedEx';
         else if (fromHeader.value.toLowerCase().includes('ups')) carrier = 'UPS';
         else if (fromHeader.value.toLowerCase().includes('usps')) carrier = 'USPS';
         else if (fromHeader.value.toLowerCase().includes('amazon')) carrier = 'Amazon';
 
-        // Set the package in the map. The last email in a thread will overwrite previous ones.
-        uniquePackages.set(threadId, {
+        uniquePackages.set(uniqueId, {
             sender: fromHeader.value.split('<')[0].replace(/"/g, '').trim(),
             carrier: carrier,
-            description: subjectHeader.value,
-            trackingNumber: uniqueId || 'See Email',
+            description: subjectText,
+            trackingNumber: uniqueId,
             date: new Date(dateHeader.value).toLocaleDateString(),
             status: fullBody.includes("has been delivered") ? "Delivered" : "In Transit",
         });
